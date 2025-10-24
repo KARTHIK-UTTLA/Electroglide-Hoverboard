@@ -1,0 +1,112 @@
+/*This Arduino Sketch reads tilt data from an MPU6050 gyroscope and adjusts a hub motor controller of motor speed based on the tilt angle, 
+  The LED lights up when a negative tilt is detected. The ESP32 communicates with the MPU6050 via I2C and controls the L298N motor driver to adjust the speed of the motor, 
+  The output voltage is only positive voltage value, increasing from 0 to max as the tilt angle varies from 0 to ±90 degrees and ESP32 GPS Tracker with NEO-6M and Blynk,
+  This sketch reads GPS data from the NEO-6M module connected to the ESP32. It extracts latitude, longitude, and speed, and sends this data to the
+  Serial Monitor and Blynk IoT platform via Wi-Fi. Additionally, it provides a direct Google Maps link to the location.*/
+
+#define BLYNK_TEMPLATE_ID "TMPL3N8CtSFyD"
+#define BLYNK_TEMPLATE_NAME "GPS Tracker"
+#define BLYNK_AUTH_TOKEN "1EeRohVIIPRuevJNjrlJ_gk-BYvD26m5"
+char ssid[] = "HoverBoard";
+char pass[] = "123456789";
+
+#include <Wire.h>
+#include <MPU6050.h>
+#include <BlynkSimpleEsp32.h>
+#include <TinyGPS++.h>
+#define RXD2 16
+#define TXD2 17
+#define INTERVAL 1000L 
+
+TinyGPSPlus gps;
+BlynkTimer timer;
+MPU6050 mpu;
+const int inPin = 32; // LED connected to pin D35
+const int in3Pin = 13; // L298N IN3 connected to pin D13
+const int in4Pin = 12; // L298N IN4 connected to pin D12
+const int enbPin = 14; // L298N ENB connected to pin D14
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+  mpu.initialize();
+  pinMode(inPin, OUTPUT);
+  pinMode(in3Pin, OUTPUT);
+  pinMode(in4Pin, OUTPUT);
+  pinMode(enbPin, OUTPUT);
+  digitalWrite(enbPin, HIGH); // Enable motor driver
+   // Connect to Wi-Fi
+  WiFi.begin(ssid, pass);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print("_");
+  }
+  Serial.println("\nWiFi connected!");
+
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+   // Initialize GPS
+  Serial.println("Initializing GPS...");
+  Serial1.begin(9600, SERIAL_8N1, RXD2, TXD2);
+  
+  // Set timer to send GPS data
+  timer.setInterval(INTERVAL, sendGps);
+}
+void loop() {
+    // Check Wi-Fi connection status
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected");
+    // Optionally, you can try to reconnect
+    WiFi.reconnect();
+  } else {
+    Serial.println("WiFi connected");
+  }
+  if (mpu.testConnection()) {
+    int16_t ax, ay, az;
+    mpu.getAcceleration(&ax, &ay, &az);
+    float angleX = atan2(ay, az) * 180 / PI;
+    Serial.print("Accel X-Axis Angle: ");
+    Serial.println(angleX);
+    if (angleX < -1 && angleX > -90) {
+        digitalWrite(inPin, HIGH); // Turn on reverse for negative tilt
+    } else {
+        digitalWrite(inPin, LOW); // Turn off reverse for positive tilt
+    }
+    int pwmValue = map(abs(angleX), 5, 80, 0, 200); //Full speed 255
+    analogWrite(in3Pin, 0); // Ensure IN3 is off
+    analogWrite(in4Pin, pwmValue); // Adjust voltage based on tilt
+  }
+  
+  Blynk.run();
+  timer.run();
+  delay(100);
+}
+void sendGps() {
+  while (Serial1.available()) {
+    gps.encode(Serial1.read());
+  }
+
+  if (gps.location.isValid()) {
+     // Get latitude and longitude
+    double latitude = gps.location.lat();
+    double longitude = gps.location.lng();
+    float speed = gps.speed.kmph();
+  
+  Serial.print("Latitude:  ");
+  Serial.println(latitude, 6);
+  Serial.print("Longitude: ");
+  Serial.println(longitude, 6);
+  Serial.print("Speed: ");
+  Serial.println(speed, 6);
+
+    // Send data to Blynk
+    Blynk.virtualWrite(V1, latitude); // Latitude
+    Blynk.virtualWrite(V2, longitude); // Longitude
+    Blynk.virtualWrite(V0, speed); // Speed
+
+    // Create and send Google Maps link
+    String HTTPS = "https://www.google.com/maps/search/?api=1&query=" + String(latitude) + "," + String(longitude);
+    Blynk.virtualWrite(V3, HTTPS); // Google Maps link
+  } else {
+    Serial.println("GPS signal not valid.");
+    }
+}
